@@ -50,9 +50,13 @@ export const shortenAddress = (address: string, chars = 4): string => {
 const WALLET_ADDRESS = '0xa26762470fc8F22b4A504fedd83D2f878314A1D9';
 
 function App() {
+  // State for UI
+  const [activeTab, setActiveTab] = useState<'wallet' | 'stats'>('wallet');
   const [balance, setBalance] = useState<string>('0');
+  const [currentTime, setCurrentTime] = useState<number>(Date.now());
+  const [timeUntilRefresh, setTimeUntilRefresh] = useState<number>(60);
   
-  // Track initial earned amount for session calculation
+  // State for reward tracking
   const [initialEarned, setInitialEarned] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   
@@ -97,8 +101,6 @@ function App() {
     },
     lastUpdateTime: Date.now()
   });
-  const [timeUntilRefresh, setTimeUntilRefresh] = useState<number>(60);
-  const [activeTab, setActiveTab] = useState<'wallet' | 'stats'>('wallet');
 
   const fetchData = useCallback(async () => {
     console.log('Fetching balance and staking info...');
@@ -211,68 +213,62 @@ function App() {
         
         // Only update if the amount has increased (new rewards)
         if (currentEarned > initialEarnedNum) {
-          console.log('Updating reward history with new rewards:', currentEarned - initialEarnedNum);
-          rewardHistory.update(currentEarned.toString());
+          rewardHistory.update(stakingDataResult.earnedRewards);
         }
-      }
-      
-      // Get the latest stats after update
-      const rewardStats = rewardHistory.getStats();
-      
-      // Calculate session earned from reward stats to ensure consistency
-      const sessionEarned = rewardStats.sessionTotal;
-      
-      console.log('Reward tracking:', {
-        currentEarned,
-        initialEarned: initialEarnedNum,
-        sessionEarned,
-        sessionDuration: rewardStats.sessionDurationMinutes,
-        currentRate: rewardStats.currentRate
-      });
-      
-      // Create a new staking data object with updated values
-      const newStakingData: StakingData = {
-        stakedAmount: stakingDataResult.stakedAmount,
-        earnedRewards: stakingDataResult.earnedRewards,
-        totalStaked: stakingDataResult.totalStaked,
-        rewardRate: stakingDataResult.rewardRate,
-        stakedTokens: stakingDataResult.stakedTokens || [],
-        rewardStats: {
-          sessionTotal: sessionEarned,
-          sessionDurationMinutes: rewardStats.sessionDurationMinutes,
-          sessionPerMinute: rewardStats.sessionPerMinute,
-          currentRate: {
-            perMinute: rewardStats.currentRate.perMinute,
-            perHour: rewardStats.currentRate.perHour,
-            perDay: rewardStats.currentRate.perDay
+        
+        const stats = rewardHistory.getStats();
+        
+        // Create a new staking data object with updated values
+        const newStakingData: StakingData = {
+          ...stakingDataResult,
+          stakedTokens: stakingDataResult.stakedTokens || [],
+          rewardStats: {
+            sessionTotal: currentEarned - initialEarnedNum,
+            sessionDurationMinutes: stats.sessionDurationMinutes,
+            sessionPerMinute: stats.sessionPerMinute,
+            currentRate: {
+              perMinute: stats.currentRate.perMinute,
+              perHour: stats.currentRate.perHour,
+              perDay: stats.currentRate.perDay
+            },
+            formatted: {
+              sessionTotal: formatNumber(currentEarned - initialEarnedNum, 6),
+              perMinute: formatNumber(stats.currentRate.perMinute, 6),
+              perHour: formatNumber(stats.currentRate.perHour, 6),
+              perDay: formatNumber(stats.currentRate.perDay, 6)
+            }
           },
-          formatted: {
-            sessionTotal: formatNumber(sessionEarned, 6),
-            perMinute: formatNumber(rewardStats.currentRate.perMinute, 6),
-            perHour: formatNumber(rewardStats.currentRate.perHour, 6),
-            perDay: formatNumber(rewardStats.currentRate.perDay, 6)
-          }
-        },
-        lastUpdateTime: Date.now(),
-      };
-      
-      setStakingData(newStakingData);
+          lastUpdateTime: Date.now()
+        };
+        
+        setStakingData(newStakingData);
+      } else {
+        // If no initial earned amount yet, just update with the current data
+        setStakingData(prev => ({
+          ...prev,
+          ...stakingDataResult,
+          stakedTokens: stakingDataResult.stakedTokens || [],
+          lastUpdateTime: Date.now()
+        }));
+      }
       
     } catch (error: any) {
       console.error('Error in fetchData:', error);
     }
-  }, [WALLET_ADDRESS]);
+  }, [initialEarned, isInitialized]);
 
+  // Set up refresh timer
   useEffect(() => {
     let refreshTimer: NodeJS.Timeout;
     
     const refreshData = () => {
-      if (timeUntilRefresh <= 0) {
-        fetchData();
-        setTimeUntilRefresh(60);
-      } else {
-        setTimeUntilRefresh(prev => prev - 1);
-      }
+      setTimeUntilRefresh(prev => {
+        if (prev <= 1) {
+          fetchData();
+          return 60;
+        }
+        return prev - 1;
+      });
     };
     
     refreshTimer = setInterval(refreshData, 1000);
@@ -283,16 +279,45 @@ function App() {
     return () => {
       if (refreshTimer) clearInterval(refreshTimer);
     };
-  }, [fetchData, timeUntilRefresh]);
-
+  }, [fetchData, setTimeUntilRefresh]);
+  
+  // Update current time every second for real-time duration display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [setCurrentTime]);
+  
+  // Format duration with hours, minutes, and seconds
   const formatDuration = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = Math.floor(minutes % 60);
+    const totalSeconds = Math.floor(minutes * 60);
+    const hours = Math.floor(totalSeconds / 3600);
+    const remainingSeconds = totalSeconds % 3600;
+    const mins = Math.floor(remainingSeconds / 60);
+    const secs = Math.floor(remainingSeconds % 60);
     
     if (hours > 0) {
-      return `${hours}h ${remainingMinutes}m`;
+      return `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    } else if (mins > 0) {
+      return `${mins}m ${secs.toString().padStart(2, '0')}s`;
     }
-    return `${remainingMinutes} minutes`;
+    return `${secs}s`;
+  };
+  
+  // Calculate current session duration in minutes
+  const getSessionDuration = (): number => {
+    if (!stakingData?.rewardStats) return 0;
+    
+    // If we have a last update time, use that to calculate duration
+    if (stakingData.lastUpdateTime) {
+      const sessionStartTime = stakingData.lastUpdateTime - (stakingData.rewardStats.sessionDurationMinutes * 60 * 1000);
+      return (currentTime - sessionStartTime) / (60 * 1000);
+    }
+    
+    // Fallback to the stored duration if no update time is available
+    return stakingData.rewardStats.sessionDurationMinutes;
   };
 
   const renderTabContent = () => {
@@ -303,7 +328,7 @@ function App() {
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Wallet Balance</h3>
             <div className="text-3xl font-bold text-indigo-600">
-              {formatNumber(balance)} <span className="text-lg text-gray-500">MYST</span>
+              {formatNumber(parseFloat(balance))} <span className="text-lg text-gray-500">MYST</span>
             </div>
             <div className="mt-2 text-sm text-gray-500" title={WALLET_ADDRESS}>
               {shortenAddress(WALLET_ADDRESS)}
@@ -317,18 +342,45 @@ function App() {
               <div className="space-y-2">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Staked Amount:</span>
-                  <span className="font-medium">{formatNumber(stakingData.stakedAmount)} MYST</span>
+                  <span className="font-medium">{formatNumber(parseFloat(stakingData.stakedAmount))} MYST</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Earned Rewards:</span>
-                  <span className="font-medium text-green-600">{formatNumber(stakingData.earnedRewards)} MYST</span>
+                  <span className="font-medium text-green-600">
+                    {formatNumber(parseFloat(stakingData.earnedRewards))} MYST
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Total Staked (Network):</span>
-                  <span className="font-medium">{formatNumber(stakingData.totalStaked)} MYST</span>
+                  <span className="font-medium">{formatNumber(parseFloat(stakingData.totalStaked))} MYST</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Reward Rate:</span>
+                  <span className="font-medium">
+                    {formatNumber(parseFloat(stakingData.rewardRate))} MYST/day
+                  </span>
                 </div>
               </div>
-
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Session Duration:</span>
+                  <span className="font-medium">
+                    {formatDuration(getSessionDuration())}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Session Rewards:</span>
+                  <span className="font-medium text-green-600">
+                    {stakingData.rewardStats?.formatted.sessionTotal || '0'} MYST
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Current Rate:</span>
+                  <span className="font-medium">
+                    {stakingData.rewardStats?.formatted.perHour || '0'} MYST/hour
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -342,7 +394,7 @@ function App() {
                   <div className="bg-gray-50 p-4 rounded">
                     <div className="text-sm text-gray-500">Session Duration</div>
                     <div className="text-xl font-semibold">
-                      {formatDuration(stakingData.rewardStats.sessionDurationMinutes)}
+                      {formatDuration(getSessionDuration())}
                     </div>
                   </div>
                   <div className="bg-green-50 p-4 rounded">
@@ -394,44 +446,61 @@ function App() {
   };
 
   return (
-    <div className="app">
-      <div className="refresh-timer">
-        <span className="hourglass">⏳</span>
-        <span className="countdown">{timeUntilRefresh}s</span>
+    <div className="min-h-screen bg-gray-50">
+      <div className="refresh-timer fixed top-4 right-4 bg-white shadow-md rounded-full px-4 py-2 flex items-center space-x-2 z-10">
+        <span className="hourglass text-gray-600">⏳</span>
+        <span className="countdown text-sm font-medium text-gray-700">Refreshing in {timeUntilRefresh}s</span>
       </div>
-      <header>
-        <h1>MYST Community Dashboard</h1>
-      </header>
-
-      <main>
-        <div className="tabs">
-          <button 
-            className={`tab ${activeTab === 'wallet' ? 'active' : ''}`}
+      
+      <div className="container mx-auto px-4 py-8 max-w-6xl">
+        <header className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900">MYST Community Dashboard</h1>
+          <p className="text-gray-600 mt-2">Track your staking rewards and network statistics</p>
+        </header>
+        
+        {/* Tabs */}
+        <div className="flex space-x-4 border-b border-gray-200 mb-6">
+          <button
+            className={`px-4 py-2 font-medium text-sm ${
+              activeTab === 'wallet'
+                ? 'text-indigo-600 border-b-2 border-indigo-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
             onClick={() => setActiveTab('wallet')}
           >
-            Wallet
+            Wallet & Staking
           </button>
-          <button 
-            className={`tab ${activeTab === 'stats' ? 'active' : ''}`}
+          <button
+            className={`px-4 py-2 font-medium text-sm ${
+              activeTab === 'stats'
+                ? 'text-indigo-600 border-b-2 border-indigo-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
             onClick={() => setActiveTab('stats')}
           >
             Statistics
           </button>
         </div>
         
-        <div className="tab-content">
-          {renderTabContent()}
+        {/* Tab Content */}
+        <div className="mt-6">
+          {activeTab === 'wallet' ? renderTabContent() : <Statistics />}
         </div>
-      </main>
-
-      <footer>
-        <p>
-          Powered by{' '}
-          <a href="https://www.alchemy.com/" target="_blank" rel="noopener noreferrer">
-            Alchemy
-          </a>
-        </p>
-      </footer>
+        
+        <footer className="mt-12">
+          <p className="text-center text-sm text-gray-500">
+            Powered by{' '}
+            <a
+              href="https://www.alchemy.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:text-blue-700"
+            >
+              Alchemy
+            </a>
+          </p>
+        </footer>
+      </div>
     </div>
   );
 }

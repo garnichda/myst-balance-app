@@ -36,7 +36,8 @@ class RewardHistory {
   private history: RewardPoint[] = [];
   private lastAmount: string = '0';
   private initialAmount: string | null = null;
-  private startTime: number = Date.now();
+  private startTime: number = 0;
+  private lastUpdateTime: number = 0;
   private readonly windowMs: number = 5 * 60 * 1000; // 5 minute window
   private initialized: boolean = false;
   
@@ -76,7 +77,7 @@ class RewardHistory {
   }
 
   /**
-   * Add a new reward amount and track the difference from the last amount
+   * Update the reward history with a new reward amount
    */
   public update(currentAmount: string | number): void {
     try {
@@ -91,6 +92,7 @@ class RewardHistory {
         this.initialAmount = currentWeiStr;
         this.lastAmount = currentWeiStr;
         this.startTime = currentTime;
+        this.lastUpdateTime = currentTime;
         this.initialized = true;
         
         // Add an initial point to start tracking
@@ -98,16 +100,16 @@ class RewardHistory {
           timestamp: currentTime,
           amount: '0'
         });
-        
-        console.log('Initial amount set, history length:', this.history.length);
         return;
       }
       
+      // Always update the last update time
+      this.lastUpdateTime = currentTime;
+      
       const currentWei = BigNumber.from(currentWeiStr);
-      const lastWei = BigNumber.from(this.lastAmount || '0');
+      const lastWei = BigNumber.from(this.lastAmount);
       
-      console.log('Current wei:', currentWei.toString(), 'Last wei:', lastWei.toString());
-      
+      // Check if rewards were claimed (current amount is less than last amount)
       if (currentWei.lt(lastWei)) {
         console.log('Detected claim or reset, resetting tracking');
         this.history = [];
@@ -120,7 +122,6 @@ class RewardHistory {
           timestamp: currentTime,
           amount: '0'
         });
-        
         return;
       }
       
@@ -128,25 +129,20 @@ class RewardHistory {
       const difference = currentWei.sub(lastWei);
       console.log('Difference since last update:', difference.toString());
       
-      // Always add a point, even if difference is 0, to maintain time tracking
-      const newPoint = {
-        timestamp: currentTime,
-        amount: difference.toString()
-      };
-      
       if (difference.gt(0)) {
+        // Only add a point if there's a positive difference
+        const newPoint = {
+          timestamp: currentTime,
+          amount: difference.toString()
+        };
+        
         console.log('Adding new reward point:', newPoint);
         this.history.push(newPoint);
         this.lastAmount = currentWeiStr;
-      } else {
-        // For zero difference, just update the timestamp of the last point
-        if (this.history.length > 0) {
-          this.history[this.history.length - 1].timestamp = currentTime;
-          console.log('Updated timestamp of last point to current time');
-        } else {
-          // Shouldn't happen, but just in case
-          this.history.push(newPoint);
-        }
+      } else if (this.history.length > 0) {
+        // For zero difference, just update the timestamp of the last point to keep session alive
+        this.history[this.history.length - 1].timestamp = currentTime;
+        console.log('Updated timestamp of last point to current time');
       }
       
       // Clean up old entries
@@ -166,8 +162,18 @@ class RewardHistory {
     
     const now = Date.now();
     const fiveMinutesAgo = now - this.windowMs;
-    const sessionDurationMs = now - this.startTime;
-    const sessionDurationMinutes = Math.max(1, sessionDurationMs / (60 * 1000)); // At least 1 minute to avoid division by zero
+    
+    // Calculate session duration based on history if available
+    let sessionDurationMs = 0;
+    if (this.history.length > 0) {
+      const firstPoint = this.history[0];
+      sessionDurationMs = now - firstPoint.timestamp;
+    } else {
+      // Fallback to start time if no history yet
+      sessionDurationMs = this.initialized ? now - this.startTime : 0;
+    }
+    
+    const sessionDurationMinutes = Math.max(0, sessionDurationMs / (60 * 1000));
     
     console.log('--- Getting Stats ---');
     console.log('Session duration (ms):', sessionDurationMs, 'minutes:', sessionDurationMinutes);
@@ -185,9 +191,13 @@ class RewardHistory {
     
     console.log('Total rewards in window (5 min):', utils.formatEther(totalRewards.toString()), 'MYST');
     
-    // Calculate session total (since page was opened)
-    let sessionTotal = BigNumber.from(0);
-    if (this.initialAmount && this.lastAmount) {
+    // Calculate session total (sum of all reward points in history)
+    let sessionTotal = this.history.reduce((sum, point) => {
+      return sum.add(BigNumber.from(point.amount));
+    }, BigNumber.from(0));
+    
+    // Fallback to difference between last and initial amount if no history points yet
+    if (sessionTotal.isZero() && this.initialAmount && this.lastAmount) {
       sessionTotal = BigNumber.from(this.lastAmount).sub(BigNumber.from(this.initialAmount));
       sessionTotal = sessionTotal.gt(0) ? sessionTotal : BigNumber.from(0);
     }
@@ -200,7 +210,7 @@ class RewardHistory {
     
     // Calculate session rate based on actual session duration
     let sessionPerMinute = BigNumber.from(0);
-    if (sessionDurationMs > 0) {
+    if (sessionDurationMs > 60000) { // Only calculate rate if we have at least 1 minute of data
       // Calculate rate per millisecond and scale to per minute (60,000 ms)
       sessionPerMinute = sessionTotal.mul(60000).div(sessionDurationMs);
     }
