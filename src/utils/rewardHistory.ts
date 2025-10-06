@@ -46,12 +46,24 @@ class RewardHistory {
    */
   private toWeiString(amount: string | number): string {
     try {
-      // If it's a number or numeric string, convert to wei
-      if (typeof amount === 'number' || /^\d+(\.\d+)?$/.test(amount.toString())) {
-        return utils.parseEther(amount.toString()).toString();
+      // If it's already a string that's a valid wei number, return as is
+      if (typeof amount === 'string' && /^\d+$/.test(amount)) {
+        return amount;
       }
-      // If it's already in wei format, return as is
-      return amount;
+      
+      // Convert to a number first to handle scientific notation
+      const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+      
+      // If the number is very small, handle it as a decimal with more precision
+      if (Math.abs(numAmount) < 1e-18) {
+        return '0';
+      }
+      
+      // Format the number to a string with up to 18 decimal places
+      const fixedAmount = numAmount.toFixed(18);
+      
+      // Parse and return as wei
+      return utils.parseEther(fixedAmount).toString();
     } catch (e) {
       console.warn('Error converting amount to wei:', amount, e);
       return '0';
@@ -83,66 +95,63 @@ class RewardHistory {
     try {
       console.log('Updating reward history with amount:', currentAmount);
       
-      const currentWeiStr = this.toWeiString(currentAmount);
       const currentTime = Date.now();
       
       // If this is the first update, set initial amount
       if (!this.initialized) {
-        console.log('Setting initial amount to:', currentWeiStr);
-        this.initialAmount = currentWeiStr;
-        this.lastAmount = currentWeiStr;
+        console.log('Initializing with amount:', currentAmount);
+        this.initialAmount = this.toWeiString(currentAmount);
+        this.lastAmount = this.initialAmount;
         this.startTime = currentTime;
-        this.lastUpdateTime = currentTime;
         this.initialized = true;
         
         // Add an initial point to start tracking
-        this.history.push({
+        this.history = [{
           timestamp: currentTime,
           amount: '0'
-        });
+        }];
+        console.log('Initialized reward history with:', this.history);
         return;
       }
       
-      // Always update the last update time
-      this.lastUpdateTime = currentTime;
-      
+      // Convert current amount to wei string for comparison
+      const currentWeiStr = this.toWeiString(currentAmount);
       const currentWei = BigNumber.from(currentWeiStr);
-      const lastWei = BigNumber.from(this.lastAmount);
-      
-      // Check if rewards were claimed (current amount is less than last amount)
-      if (currentWei.lt(lastWei)) {
-        console.log('Detected claim or reset, resetting tracking');
-        this.history = [];
-        this.lastAmount = currentWeiStr;
-        this.initialAmount = currentWeiStr;
-        this.startTime = currentTime;
-        
-        // Add an initial point after reset
-        this.history.push({
-          timestamp: currentTime,
-          amount: '0'
-        });
-        return;
-      }
+      const lastWei = BigNumber.from(this.lastAmount || '0');
       
       // Calculate the difference since last update
       const difference = currentWei.sub(lastWei);
       console.log('Difference since last update:', difference.toString());
       
+      // If the difference is negative, it means rewards were claimed
+      if (difference.lt(0)) {
+        console.log('Detected claim or reset, resetting tracking');
+        this.history = [{
+          timestamp: currentTime,
+          amount: '0'
+        }];
+        this.initialAmount = currentWeiStr;
+        this.lastAmount = currentWeiStr;
+        this.startTime = currentTime;
+        console.log('Reset reward history after claim');
+        return;
+      }
+      
+      // Update the last amount
+      this.lastAmount = currentWeiStr;
+      
+      // If there's a positive difference, add it to the history
       if (difference.gt(0)) {
-        // Only add a point if there's a positive difference
         const newPoint = {
           timestamp: currentTime,
           amount: difference.toString()
         };
-        
         console.log('Adding new reward point:', newPoint);
         this.history.push(newPoint);
-        this.lastAmount = currentWeiStr;
       } else if (this.history.length > 0) {
-        // For zero difference, just update the timestamp of the last point to keep session alive
+        // For zero difference, update the timestamp of the last point to keep session alive
         this.history[this.history.length - 1].timestamp = currentTime;
-        console.log('Updated timestamp of last point to current time');
+        console.log('Updated timestamp of last point');
       }
       
       // Clean up old entries

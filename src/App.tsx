@@ -54,7 +54,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<'wallet' | 'stats'>('wallet');
   const [balance, setBalance] = useState<string>('0');
   const [currentTime, setCurrentTime] = useState<number>(Date.now());
-  const [timeUntilRefresh, setTimeUntilRefresh] = useState<number>(60);
+  const [timeUntilRefresh, setTimeUntilRefresh] = useState<number>(10);
   
   // State for reward tracking
   const [initialEarned, setInitialEarned] = useState<string | null>(null);
@@ -205,17 +205,49 @@ function App() {
       
       // Get the current earned amount
       const currentEarned = parseFloat(stakingDataResult.earnedRewards);
-      const initialEarnedNum = parseFloat(initialEarned || '0');
       
-      // Only update if we have a valid initial amount and the amount has changed
-      if (initialEarned !== null) {
+      if (initialEarned === null) {
+        console.log('Setting initial earned amount:', currentEarned);
+        setInitialEarned(stakingDataResult.earnedRewards);
+        
+        // Initialize the reward history with the current amount
+        rewardHistory.update(currentEarned);
+        
+        // Update the UI with initial data
+        const stats = rewardHistory.getStats();
+        const newStakingData: StakingData = {
+          ...stakingDataResult,
+          stakedTokens: stakingDataResult.stakedTokens || [],
+          rewardStats: {
+            sessionTotal: 0,
+            sessionDurationMinutes: 0,
+            sessionPerMinute: 0,
+            currentRate: {
+              perMinute: 0,
+              perHour: 0,
+              perDay: 0
+            },
+            formatted: {
+              sessionTotal: '0',
+              perMinute: '0',
+              perHour: '0',
+              perDay: '0'
+            }
+          },
+          lastUpdateTime: Date.now()
+        };
+        
+        console.log('Initial staking data:', newStakingData);
+        setStakingData(newStakingData);
+      } else {
+        const initialEarnedNum = parseFloat(initialEarned);
         console.log('Current earned:', currentEarned, 'Initial earned:', initialEarnedNum);
         
-        // Only update if the amount has increased (new rewards)
-        if (currentEarned > initialEarnedNum) {
-          rewardHistory.update(stakingDataResult.earnedRewards);
-        }
+        // Always update the reward history with the current earned amount
+        // The RewardHistory class will handle the difference calculation
+        rewardHistory.update(currentEarned);
         
+        // Get the latest stats
         const stats = rewardHistory.getStats();
         
         // Create a new staking data object with updated values
@@ -223,7 +255,7 @@ function App() {
           ...stakingDataResult,
           stakedTokens: stakingDataResult.stakedTokens || [],
           rewardStats: {
-            sessionTotal: currentEarned - initialEarnedNum,
+            sessionTotal: stats.sessionTotal,
             sessionDurationMinutes: stats.sessionDurationMinutes,
             sessionPerMinute: stats.sessionPerMinute,
             currentRate: {
@@ -232,24 +264,17 @@ function App() {
               perDay: stats.currentRate.perDay
             },
             formatted: {
-              sessionTotal: formatNumber(currentEarned - initialEarnedNum, 6),
+              sessionTotal: formatNumber(stats.sessionTotal, 6),
               perMinute: formatNumber(stats.currentRate.perMinute, 6),
-              perHour: formatNumber(stats.currentRate.perHour, 6),
-              perDay: formatNumber(stats.currentRate.perDay, 6)
+              perHour: formatNumber(stats.currentRate.perHour, 2),
+              perDay: formatNumber(stats.currentRate.perDay, 2)
             }
           },
           lastUpdateTime: Date.now()
         };
         
+        console.log('Updating staking data with:', newStakingData);
         setStakingData(newStakingData);
-      } else {
-        // If no initial earned amount yet, just update with the current data
-        setStakingData(prev => ({
-          ...prev,
-          ...stakingDataResult,
-          stakedTokens: stakingDataResult.stakedTokens || [],
-          lastUpdateTime: Date.now()
-        }));
       }
       
     } catch (error: any) {
@@ -265,7 +290,7 @@ function App() {
       setTimeUntilRefresh(prev => {
         if (prev <= 1) {
           fetchData();
-          return 60;
+          return 10;
         }
         return prev - 1;
       });
